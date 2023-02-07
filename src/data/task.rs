@@ -1,4 +1,4 @@
-use chrono:: {Duration, Local, NaiveDateTime};
+use chrono::{Duration, Local, NaiveDateTime};
 
 pub struct Task {
     pub start: NaiveDateTime,
