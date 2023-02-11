@@ -1,4 +1,4 @@
-use std::env;
+use std::{env, sync::mpsc::channel};
 use std::fmt::Write as _;
 
 use serenity::{
@@ -8,6 +8,9 @@ use serenity::{
 };
 
 use crate::data::task::Task;
+use chrono;
+use std::sync::mpsc::channel as SyncChannel;
+use timer::Timer;
 pub mod data;
 
 const COMMAND_NOT_FOUND_MESSAGE: &str = "
@@ -18,6 +21,11 @@ const HELP_COMMAND: &str = "!help";
 const TASK_ADD_COMMAND: &str = "!task add";
 const TASK_REMOVE_COMMAND: &str = "!task remove";
 const TASK_LIST_COMMAND: &str = "!task list";
+const POMODORO_START:&str = "!pomodoro start";
+const POMODORO_PAUSE:&str = "!pomodoro pause";
+const POMODORO_CHECK:&str = "!pomodoro check";
+
+const POMODORO_TIMER_MINUTES: i32 = 25;
 
 struct Handler {
     database: sqlx::SqlitePool
@@ -31,21 +39,18 @@ fn help_message() -> String {
         '{}' - adds a task to the task list,
         '{}' + 'task number' - removes and completes a specific task,
         '{}' - displays task list,
+        '{}' - start the pomodoro timer,
+        '{}' - pause the pomodoro timer,
+        '{}' - check the pomodoro current time,
 
         — PomodoroBot 🤖"
-    ,HELP_COMMAND, TASK_ADD_COMMAND, TASK_REMOVE_COMMAND, TASK_LIST_COMMAND)
+    ,HELP_COMMAND, TASK_ADD_COMMAND, TASK_REMOVE_COMMAND, TASK_LIST_COMMAND, POMODORO_START, POMODORO_CHECK, POMODORO_PAUSE)
 }
 
 #[async_trait]
 impl EventHandler for Handler {
     async fn message(&self, ctx: Context, msg: Message) {
         let user_id = msg.author.id.0 as i64;
-
-        if msg.content == HELP_COMMAND {
-            if let Err(why) = msg.channel_id.say(&ctx.http, help_message()).await {
-                println!("Error sending message: {:?}", why);
-            }
-        }
 
         if let Some(task_description) = msg.content.strip_prefix(TASK_ADD_COMMAND) {
             let task_description = task_description.trim();
@@ -95,6 +100,21 @@ impl EventHandler for Handler {
             }
 
             msg.channel_id.say(&ctx, response).await.unwrap();
+        } else if msg.content.trim() == HELP_COMMAND {
+            if let Err(why) = msg.channel_id.say(&ctx.http, help_message()).await {
+                println!("Error sending message: {:?}", why);
+            }
+        } else if msg.content.trim() == POMODORO_START {
+           let timer = Timer::new();
+           let (tx, rx) = SyncChannel();
+           let _guard = timer.schedule_with_delay(chrono::Duration::seconds(5), move || {
+               let _ignored = tx.send(());
+           });
+           rx.recv().unwrap();
+
+            if let Err(why) = msg.channel_id.say(&ctx.http, help_message()).await {
+                println!("Error sending message: {:?}", why);
+            }
         }
         
         match_message_command(&msg.content);
