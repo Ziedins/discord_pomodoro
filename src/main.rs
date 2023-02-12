@@ -1,5 +1,7 @@
+use std::time::{Instant, Duration};
 use std::{env, sync::mpsc::channel};
 use std::fmt::Write as _;
+use std::thread::sleep;
 
 use serenity::{
     async_trait,
@@ -25,7 +27,7 @@ const POMODORO_START:&str = "!pomodoro start";
 const POMODORO_PAUSE:&str = "!pomodoro pause";
 const POMODORO_CHECK:&str = "!pomodoro check";
 
-const POMODORO_TIMER_MINUTES: i32 = 25;
+const POMODORO_TIMER_MINUTES: u64 = 25;
 
 struct Handler {
     database: sqlx::SqlitePool
@@ -45,6 +47,56 @@ fn help_message() -> String {
 
         — PomodoroBot 🤖"
     ,HELP_COMMAND, TASK_ADD_COMMAND, TASK_REMOVE_COMMAND, TASK_LIST_COMMAND, POMODORO_START, POMODORO_CHECK, POMODORO_PAUSE)
+}
+
+pub struct PomodoroSession {
+    pomodoro_tracker: StateTracker,
+    clock: Clock,
+}
+
+impl PomodoroSession {
+    fn begin_cycle(&mut self) {
+        self.start_work();    
+    }
+
+    pub fn start_work(&mut self) {
+        self.pomodoro_tracker.set_work_state();
+        self.clock.set_time_minutes(POMODORO_TIMER_MINUTES);
+        self.countdown();
+    }
+
+    pub fn countdown(&mut self) {
+        match self.pomodoro_tracker.current_state {
+            PomodoroState::Working => self.countdown_work(),
+            _ => (),
+        }
+    }
+
+    pub fn countdown_work(&mut self) {
+        loop {
+            let true_elapsed: u64 = (self
+                .pomodoro_tracker
+                .started_at
+                .unwrap()
+                .elapsed()
+                .as_millis()
+                ) as u64;
+
+            let clock_elapsed = (POMODORO_TIMER_MINUTES * 60000) - self.clock.get_ms_from_time();
+            
+            let sync_offset = true_elapsed - clock_elapsed;
+
+            sleep(Duration::from_millis(1000 - sync_offset));
+
+            self.clock.decrement_one_second();
+
+            println!("Remaining time: {}", self.clock.get_time());
+
+            if &self.clock.get_ms_from_time() == &0 {
+                break;
+            }
+        }
+    }
 }
 
 #[async_trait]
@@ -105,13 +157,11 @@ impl EventHandler for Handler {
                 println!("Error sending message: {:?}", why);
             }
         } else if msg.content.trim() == POMODORO_START {
-           let timer = Timer::new();
-           let (tx, rx) = SyncChannel();
-           let _guard = timer.schedule_with_delay(chrono::Duration::seconds(5), move || {
-               let _ignored = tx.send(());
-           });
-           rx.recv().unwrap();
-
+            let mut pomodoro = PomodoroSession {
+                pomodoro_tracker: StateTracker::new(),
+                clock: Clock::new()
+            };
+            pomodoro.start_work();
             if let Err(why) = msg.channel_id.say(&ctx.http, help_message()).await {
                 println!("Error sending message: {:?}", why);
             }
@@ -139,6 +189,84 @@ fn execute_help() {
 
 fn execute_add_task() {
     println!("Add task test");
+}
+
+pub struct StateTracker {
+    current_order: Option<i64>,
+    current_state: PomodoroState,
+    started_at: Option<Instant>,
+}
+
+impl StateTracker {
+
+    pub fn new() -> StateTracker {
+        StateTracker {
+            current_order: None,
+            current_state: PomodoroState::None,
+            started_at: None,
+        }
+    }
+
+    fn increment_cycle(&mut self) {
+        let new_order = match self.current_order {
+            Some(num) if num < 4 => Some(num + 1),
+            _ => Some(1),
+        };
+        self.current_order = new_order;
+    }
+    
+    pub fn set_work_state(&mut self) {
+        let now = Instant::now();
+        self.started_at = Some(now);
+
+        self.current_state = PomodoroState::Working;
+        self.increment_cycle();
+    }
+
+}
+
+enum PomodoroState {
+    Working,
+    ShortBreak,
+    LongBreak,
+    None
+}
+
+pub struct Clock {
+    minutes: u64,
+    seconds: u64,
+}
+
+impl Clock {
+    pub fn new() -> Clock {
+        Clock {
+            minutes: 0,
+            seconds: 0,
+        }
+    }
+
+    pub fn set_time_ms(&mut self, ms: u64) {
+        self.minutes = (ms / (1000 * 60)) % 60;
+        self.seconds = (ms / 1000) % 60;
+    }
+
+    pub fn set_time_minutes(&mut self, minutes: u64) {
+        self.set_time_ms(minutes * 60000)
+    }
+
+    pub fn get_ms_from_time(&mut self) -> u64 {
+        (self.minutes * 60000) + (self.seconds * 1000)
+    }
+
+    pub fn decrement_one_second(&mut self) {
+        let mut time_in_ms = self.get_ms_from_time();
+        time_in_ms -= 1000;
+        self.set_time_ms(time_in_ms);
+    }
+
+    pub fn get_time(&self) -> String {
+        format!("{:02}:{:02}", self.minutes, self.seconds)
+    }
 }
 
 #[tokio::main]
